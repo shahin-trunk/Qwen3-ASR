@@ -208,7 +208,7 @@ def main():
         "--num_proc", 
         type=int, 
         default=64, 
-        help="Number of parallel processes (default: 64)"
+        help="Number of parallel processes for conversion (default: 64)"
     )
     parser.add_argument(
         "--split",
@@ -245,94 +245,92 @@ def main():
     print(f"Loaded {total_samples:,} samples")
     print()
     
-    # Calculate shard sizes
-    num_shards = min(args.num_shards, total_samples)
-    samples_per_shard = total_samples // num_shards
-    remainder = total_samples % num_shards
-    
-    # Prepare shard info
-    shards = []
-    current_idx = 0
-    for i in range(num_shards):
-        shard_size = samples_per_shard + (1 if i < remainder else 0)
-        end_idx = current_idx + shard_size
-        
-        shard_output = output_dir / f"shard_{i:05d}.jsonl"
-        shards.append({
-            'shard_id': i,
-            'start_idx': current_idx,
-            'end_idx': end_idx,
-            'output_path': str(shard_output)
-        })
-        current_idx = end_idx
-    
-    print(f"Processing {num_shards} shards...")
-    print()
-    
-    # Process shards
-    num_workers = min(args.num_proc, num_shards)
-    
-    total_success = 0
-    total_processed = 0
-    
-    # Progress bar for overall progress
-    overall_pbar = tqdm(
-        total=num_shards,
-        desc="Overall progress",
-        position=8,
-        leave=True,
-        ncols=100
+    # Convert samples using parallel map
+    print("Converting samples (detecting languages)...", flush=True)
+    ds_converted = ds.map(
+        convert_sample,
+        num_proc=args.num_proc,
+        desc="Converting",
+        remove_columns=ds.column_names,  # Remove original columns
     )
     
-    with ProcessPoolExecutor(max_workers=num_workers) as executor:
-        futures = {}
-        
-        for shard in shards:
-            # Extract samples for this shard
-            shard_samples = [
-                ds[i] for i in range(shard['start_idx'], shard['end_idx'])
-            ]
-            
-            future = executor.submit(
-                process_shard,
-                shard_samples,
-                shard['shard_id'],
-                shard['output_path'],
-                num_shards
-            )
-            futures[future] = shard
-        
-        for future in as_completed(futures):
-            shard = futures[future]
-            try:
-                shard_id, success_count, processed_count = future.result()
-                total_success += success_count
-                total_processed += processed_count
-                overall_pbar.update(1)
-            except Exception as e:
-                print(f"\nShard {shard['shard_id']} failed: {e}")
-                overall_pbar.update(1)
+    # Filter valid samples
+    print("Filtering valid samples...", flush=True)
+    ds_valid = ds_converted.filter(
+        lambda x: x["valid"],
+        num_proc=args.num_proc,
+        desc="Filtering"
+    )
     
-    overall_pbar.close()
+    valid_count = len(ds_valid)
+    print(f"Valid samples: {valid_count:,} / {total_samples:,}")
+    print()
+    
+    # Remove the 'valid' column before saving
+    ds_valid = ds_valid.remove_columns(["valid"])
+    
+    # Calculate shard sizes
+    num_shards = min(args.num_shards, valid_count)
+    samples_per_shard = valid_count // num_shards
+    remainder = valid_count % num_shards
+    
+    print(f"Writing {num_shards} shards...")
+    
+    # Write shards
+    current_idx = 0
+    shard_files = []
+    
+    for shard_id in tqdm(range(num_shards), desc="Writing shards"):
+        shard_size = samples_per_shard + (1 if shard_id < remainder else 0)
+        end_idx = current_idx + shard_size
+        
+        # Get shard data
+        shard_data = ds_valid.select(range(current_idx, end_idx))
+        
+        # Write to JSONL
+        shard_path = output_dir / f"shard_{shard_id:05d}.jsonl"
+        shard_files.append(str(shard_path))
+        
+        with open(shard_path, 'w', encoding='utf-8') as f:
+            for sample in shard_data:
+                f.write(json.dumps(sample, ensure_ascii=False) + '\n')
+        
+        current_idx = end_idx
     
     # Create manifest file listing all shards
     manifest_path = output_dir / "manifest.txt"
     with open(manifest_path, 'w') as f:
-        for shard in shards:
-            f.write(shard['output_path'] + '\n')
+        for shard_file in shard_files:
+            f.write(shard_file + '\n')
+    
+    # Language statistics
+    print()
+    print("Computing language statistics...")
+    lang_counts = {}
+    for sample in tqdm(ds_valid, desc="Counting languages"):
+        text = sample["text"]
+        # Extract language from "language X<asr_text>..."
+        if text.startswith("language "):
+            lang = text.split("<asr_text>")[0].replace("language ", "").strip()
+            lang_counts[lang] = lang_counts.get(lang, 0) + 1
     
     # Summary
-    failed_count = total_processed - total_success
     print()
     print("=" * 80)
     print("CONVERSION COMPLETE")
     print("=" * 80)
-    print(f"Total processed: {total_processed:,}")
-    print(f"Successful:      {total_success:,}")
-    if failed_count > 0:
-        print(f"Skipped:         {failed_count:,}")
+    print(f"Total input:     {total_samples:,}")
+    print(f"Valid output:    {valid_count:,}")
+    print(f"Skipped:         {total_samples - valid_count:,}")
     print(f"Output shards:   {num_shards} files in {args.output_dir}")
     print(f"Manifest:        {manifest_path}")
+    print()
+    
+    # Print language distribution
+    print("Language distribution:")
+    for lang, count in sorted(lang_counts.items(), key=lambda x: -x[1]):
+        pct = 100.0 * count / valid_count
+        print(f"  {lang:15s}: {count:>10,} ({pct:5.2f}%)")
     print()
     
     # Print sample output
