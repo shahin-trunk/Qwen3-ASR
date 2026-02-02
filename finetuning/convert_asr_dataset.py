@@ -30,6 +30,7 @@ import argparse
 import json
 import os
 import sys
+from functools import partial
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -137,7 +138,7 @@ def detect_language(text: str) -> str:
         return "None"
 
 
-def convert_sample(sample: Dict[str, Any]) -> Dict[str, Any]:
+def convert_sample(sample: Dict[str, Any], audio_base_path: str = None) -> Dict[str, Any]:
     """
     Convert a single sample from HuggingFace format to Qwen3-ASR format.
     
@@ -170,6 +171,10 @@ def convert_sample(sample: Dict[str, Any]) -> Dict[str, Any]:
     audio_path = audios[0] if audios else None
     if not audio_path:
         return {"audio": "", "text": "", "valid": False}
+    
+    # Join with base path if provided
+    if audio_base_path:
+        audio_path = os.path.join(audio_base_path, audio_path)
     
     # Detect language
     language = detect_language(transcription)
@@ -211,6 +216,12 @@ def main():
         help="Number of parallel processes (default: 64)"
     )
     parser.add_argument(
+        "--audio_base_path",
+        type=str,
+        default=None,
+        help="Base path to prepend to audio paths (default: None)"
+    )
+    parser.add_argument(
         "--split",
         default="train",
         help="Dataset split to process (default: train)"
@@ -225,6 +236,7 @@ def main():
     print(f"Output dir:  {args.output_dir}")
     print(f"Num shards:  {args.num_shards}")
     print(f"Num proc:    {args.num_proc}")
+    print(f"Audio base:  {args.audio_base_path or '(none)'}")
     print(f"Split:       {args.split}")
     print()
     
@@ -239,10 +251,45 @@ def main():
     print(f"Loaded {total_samples:,} samples")
     print()
     
+    # Validate audio paths with random 100 samples
+    print("Validating audio paths (random 100 samples)...", flush=True)
+    import random
+    sample_indices = random.sample(range(total_samples), min(100, total_samples))
+    missing_count = 0
+    checked_paths = []
+    
+    for idx in sample_indices:
+        sample = ds[idx]
+        audios = sample.get("audios", [])
+        if audios:
+            audio_path = audios[0]
+            if args.audio_base_path:
+                audio_path = os.path.join(args.audio_base_path, audio_path)
+            
+            if not os.path.exists(audio_path):
+                missing_count += 1
+                if len(checked_paths) < 5:  # Show first 5 missing
+                    checked_paths.append(audio_path)
+    
+    if missing_count > 0:
+        print(f"WARNING: {missing_count}/100 sampled audio files not found!")
+        print("Example missing paths:")
+        for p in checked_paths:
+            print(f"  {p}")
+        print()
+        response = input("Continue anyway? [y/N]: ").strip().lower()
+        if response != 'y':
+            print("Aborted.")
+            sys.exit(1)
+    else:
+        print(f"All 100 sampled audio files exist. Proceeding...")
+    print()
+
     # Convert samples using parallel map
     print("Converting samples (detecting languages)...", flush=True)
+    convert_fn = partial(convert_sample, audio_base_path=args.audio_base_path)
     ds_converted = ds.map(
-        convert_sample,
+        convert_fn,
         num_proc=args.num_proc,
         desc="Converting",
         remove_columns=ds.column_names,  # Remove original columns
