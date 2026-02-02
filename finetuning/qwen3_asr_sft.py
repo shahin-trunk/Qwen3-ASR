@@ -264,7 +264,7 @@ def main():
             **({"validation": args_cli.eval_file} if args_cli.eval_file else {}),
         },
     )
-    ds = raw_ds.map(make_preprocess_fn_prefix_only(processor), num_proc=1)
+    ds = raw_ds.map(make_preprocess_fn_prefix_only(processor), num_proc=args_cli.num_workers)
 
     keep = {"prompt", "audio", "target", "prefix_text"}
     for split in ds.keys():
