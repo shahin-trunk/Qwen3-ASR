@@ -14,7 +14,7 @@ Output format (JSONL):
     {"audio": "/path/to/audio.wav", "text": "language English<asr_text>transcription text"}
 
 Features:
-- Uses lingua-language-detector for automatic language detection
+- Uses langdetect for automatic language detection (supports Malayalam)
 - Supports 256 output shards for distributed training
 - Efficient batch processing using datasets library
 
@@ -38,67 +38,36 @@ from datasets import load_dataset
 from loguru import logger
 from tqdm import tqdm
 
-# Global detector (initialized once per process)
-_DETECTOR = None
-
-# Language mapping from lingua to Qwen3-ASR format
+# Language code mapping from langdetect to Qwen3-ASR format
 # Limited to: Arabic, Malayalam, Chinese, English, Hindi
-LINGUA_TO_QWEN_LANG = {
-    "ARABIC": "Arabic",
-    "MALAYALAM": "Malayalam",
-    "CHINESE": "Chinese",
-    "ENGLISH": "English",
-    "HINDI": "Hindi",
+LANGDETECT_TO_QWEN = {
+    "ar": "Arabic",
+    "ml": "Malayalam",
+    "zh-cn": "Chinese",
+    "zh-tw": "Chinese",
+    "en": "English",
+    "hi": "Hindi",
 }
 
 # Only these languages are supported in this dataset
 SUPPORTED_LANGUAGES = {"Arabic", "Malayalam", "Chinese", "English", "Hindi"}
 
 
-def get_language_detector():
-    """Get or initialize lingua language detector (cached per process)."""
-    global _DETECTOR
-    if _DETECTOR is None:
-        try:
-            from lingua import Language, LanguageDetectorBuilder
-            
-            # Only detect: Arabic, Malayalam, Chinese, English, Hindi
-            languages = [
-                Language.ARABIC,
-                Language.MALAYALAM,
-                Language.CHINESE,
-                Language.ENGLISH,
-                Language.HINDI,
-            ]
-            
-            _DETECTOR = LanguageDetectorBuilder.from_languages(*languages).build()
-        except ImportError:
-            logger.error("lingua-language-detector not installed. Install with: pip install lingua-language-detector")
-            sys.exit(1)
-    return _DETECTOR
-
-
 def detect_language(text: str) -> str:
     """
-    Detect language from text using lingua.
+    Detect language from text using langdetect.
     
-    Returns Qwen3-ASR language name or "None" if detection fails.
+    Returns Qwen3-ASR language name or "None" if detection fails or unsupported.
     """
     if not text or not text.strip():
         return "None"
     
     try:
-        detector = get_language_detector()
-        result = detector.detect_language_of(text)
-        if result is None:
-            return "None"
+        from langdetect import detect
+        lang_code = detect(text)
         
-        lang_name = result.name  # e.g., "ARABIC", "ENGLISH"
-        qwen_lang = LINGUA_TO_QWEN_LANG.get(lang_name, "None")
-        
-        # Validate against supported languages
-        if qwen_lang not in SUPPORTED_LANGUAGES:
-            return "None"
+        # Map to Qwen3-ASR language name
+        qwen_lang = LANGDETECT_TO_QWEN.get(lang_code, "None")
         
         return qwen_lang
     except Exception:
@@ -320,6 +289,27 @@ def main():
     for lang, count in sorted(lang_counts.items(), key=lambda x: -x[1]):
         pct = 100.0 * count / valid_count
         logger.info(f"  {lang:15s}: {count:>10,} ({pct:5.2f}%)")
+    
+    # Save undetected (None) language texts to file
+    none_count = lang_counts.get("None", 0)
+    if none_count > 0:
+        none_file = output_dir / "undetected_languages.jsonl"
+        logger.info(f"Saving {none_count:,} undetected language samples to {none_file}...")
+        
+        # Filter samples with "None" language
+        none_samples = ds_valid.filter(
+            lambda x: x["text"].startswith("language None<asr_text>"),
+            num_proc=args.num_proc,
+            desc="Filtering undetected"
+        )
+        
+        with open(none_file, 'w', encoding='utf-8') as f:
+            for sample in none_samples:
+                # Extract just the text part for analysis
+                text = sample["text"].replace("language None<asr_text>", "")
+                f.write(json.dumps({"audio": sample["audio"], "text": text}, ensure_ascii=False) + '\n')
+        
+        logger.info(f"Saved {none_count:,} undetected samples to {none_file}")
     
     # Print sample output
     logger.info("Sample output format:")
