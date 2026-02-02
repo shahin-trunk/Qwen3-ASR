@@ -278,6 +278,7 @@ def main():
     training_args = TrainingArguments(
         output_dir=args_cli.output_dir,
         per_device_train_batch_size=args_cli.batch_size,
+        per_device_eval_batch_size=args_cli.batch_size,
         gradient_accumulation_steps=args_cli.grad_acc,
         learning_rate=args_cli.lr,
         num_train_epochs=args_cli.epochs,
