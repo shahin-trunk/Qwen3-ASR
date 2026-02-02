@@ -312,37 +312,16 @@ def main():
     
     # Calculate shard sizes
     num_shards = min(args.num_shards, valid_count)
-    samples_per_shard = valid_count // num_shards
-    remainder = valid_count % num_shards
     
-    print(f"Writing {num_shards} shards...")
+    print(f"Shuffling dataset...")
+    ds_valid = ds_valid.shuffle(seed=42)
     
-    # Write shards
-    current_idx = 0
-    shard_files = []
+    print(f"Writing {num_shards} parquet shards...")
     
-    for shard_id in tqdm(range(num_shards), desc="Writing shards"):
-        shard_size = samples_per_shard + (1 if shard_id < remainder else 0)
-        end_idx = current_idx + shard_size
-        
-        # Get shard data
-        shard_data = ds_valid.select(range(current_idx, end_idx))
-        
-        # Write to JSONL
-        shard_path = output_dir / f"shard_{shard_id:05d}.jsonl"
-        shard_files.append(str(shard_path))
-        
-        with open(shard_path, 'w', encoding='utf-8') as f:
-            for sample in shard_data:
-                f.write(json.dumps(sample, ensure_ascii=False) + '\n')
-        
-        current_idx = end_idx
-    
-    # Create manifest file listing all shards
-    manifest_path = output_dir / "manifest.txt"
-    with open(manifest_path, 'w') as f:
-        for shard_file in shard_files:
-            f.write(shard_file + '\n')
+    for shard_idx in tqdm(range(num_shards), desc="Writing shards"):
+        shard = ds_valid.shard(num_shards=num_shards, index=shard_idx)
+        shard_path = output_dir / f"{shard_idx:05d}.parquet"
+        shard.to_parquet(str(shard_path))
     
     # Language statistics
     print()
@@ -355,7 +334,6 @@ def main():
             lang = text.split("<asr_text>")[0].replace("language ", "").strip()
             lang_counts[lang] = lang_counts.get(lang, 0) + 1
     
-    # Summary
     print()
     print("=" * 80)
     print("CONVERSION COMPLETE")
@@ -363,8 +341,8 @@ def main():
     print(f"Total input:     {total_samples:,}")
     print(f"Valid output:    {valid_count:,}")
     print(f"Skipped:         {total_samples - valid_count:,}")
-    print(f"Output shards:   {num_shards} files in {args.output_dir}")
-    print(f"Manifest:        {manifest_path}")
+    print(f"Output shards:   {num_shards} parquet files in {args.output_dir}")
+    print(f"Samples/shard:   ~{valid_count // num_shards:,}")
     print()
     
     # Print language distribution
@@ -376,14 +354,14 @@ def main():
     
     # Print sample output
     print("Sample output format:")
-    first_shard = output_dir / "shard_00000.jsonl"
+    first_shard = output_dir / "00000.parquet"
     if first_shard.exists():
-        with open(first_shard, 'r') as f:
-            for i, line in enumerate(f):
-                if i >= 3:
-                    break
-                sample = json.loads(line)
-                print(f"  {json.dumps(sample, ensure_ascii=False)[:120]}...")
+        import pyarrow.parquet as pq
+        table = pq.read_table(str(first_shard))
+        df = table.to_pandas()
+        for i in range(min(3, len(df))):
+            sample = df.iloc[i].to_dict()
+            print(f"  {json.dumps(sample, ensure_ascii=False)[:120]}...")
 
 
 if __name__ == "__main__":
