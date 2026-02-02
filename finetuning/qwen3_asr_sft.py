@@ -223,6 +223,7 @@ def parse_args():
 
     # DataLoader
     p.add_argument("--num_workers", type=int, default=4)
+    p.add_argument("--num_proc", type=int, default=64)
     p.add_argument("--pin_memory", type=int, default=1)
     p.add_argument("--persistent_workers", type=int, default=1)
     p.add_argument("--prefetch_factor", type=int, default=2)
@@ -264,7 +265,7 @@ def main():
             **({"validation": args_cli.eval_file} if args_cli.eval_file else {}),
         },
     )
-    ds = raw_ds.map(make_preprocess_fn_prefix_only(processor), num_proc=args_cli.num_workers)
+    ds = raw_ds.map(make_preprocess_fn_prefix_only(processor), num_proc=args_cli.num_proc)
 
     keep = {"prompt", "audio", "target", "prefix_text"}
     for split in ds.keys():
