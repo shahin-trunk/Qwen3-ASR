@@ -208,18 +208,12 @@ def main():
         "--num_proc", 
         type=int, 
         default=64, 
-        help="Number of parallel processes for conversion (default: 64)"
+        help="Number of parallel processes (default: 64)"
     )
     parser.add_argument(
         "--split",
         default="train",
         help="Dataset split to process (default: train)"
-    )
-    parser.add_argument(
-        "--dataset_num_proc",
-        type=int,
-        default=96,
-        help="Number of processes for loading dataset (default: 96)"
     )
     
     args = parser.parse_args()
@@ -240,7 +234,7 @@ def main():
     
     # Load dataset
     print("Loading dataset...", flush=True)
-    ds = load_dataset(args.input_dataset, split=args.split, num_proc=args.dataset_num_proc)
+    ds = load_dataset(args.input_dataset, split=args.split, num_proc=args.num_proc)
     total_samples = len(ds)
     print(f"Loaded {total_samples:,} samples")
     print()
