@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 
 from datasets import load_dataset
+from loguru import logger
 from tqdm import tqdm
 
 # Global detector (initialized once per process)
@@ -105,8 +106,7 @@ def get_language_detector():
             
             _DETECTOR = LanguageDetectorBuilder.from_languages(*languages).build()
         except ImportError:
-            print("ERROR: lingua-language-detector not installed.")
-            print("Install with: pip install lingua-language-detector")
+            logger.error("lingua-language-detector not installed. Install with: pip install lingua-language-detector")
             sys.exit(1)
     return _DETECTOR
 
@@ -229,30 +229,28 @@ def main():
     
     args = parser.parse_args()
     
-    print("=" * 80)
-    print("QWEN3-ASR DATASET CONVERSION")
-    print("=" * 80)
-    print(f"Input:       {args.input_dataset}")
-    print(f"Output dir:  {args.output_dir}")
-    print(f"Num shards:  {args.num_shards}")
-    print(f"Num proc:    {args.num_proc}")
-    print(f"Audio base:  {args.audio_base_path or '(none)'}")
-    print(f"Split:       {args.split}")
-    print()
+    logger.info("=" * 60)
+    logger.info("QWEN3-ASR DATASET CONVERSION")
+    logger.info("=" * 60)
+    logger.info(f"Input:       {args.input_dataset}")
+    logger.info(f"Output dir:  {args.output_dir}")
+    logger.info(f"Num shards:  {args.num_shards}")
+    logger.info(f"Num proc:    {args.num_proc}")
+    logger.info(f"Audio base:  {args.audio_base_path or '(none)'}")
+    logger.info(f"Split:       {args.split}")
     
     # Create output directory
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Load dataset
-    print("Loading dataset...", flush=True)
+    logger.info("Loading dataset...")
     ds = load_dataset(args.input_dataset, split=args.split, num_proc=args.num_proc)
     total_samples = len(ds)
-    print(f"Loaded {total_samples:,} samples")
-    print()
+    logger.info(f"Loaded {total_samples:,} samples")
     
     # Validate audio paths with random 100 samples
-    print("Validating audio paths (random 100 samples)...", flush=True)
+    logger.info("Validating audio paths (random 100 samples)...")
     import random
     sample_indices = random.sample(range(total_samples), min(100, total_samples))
     missing_count = 0
@@ -272,21 +270,19 @@ def main():
                     checked_paths.append(audio_path)
     
     if missing_count > 0:
-        print(f"WARNING: {missing_count}/100 sampled audio files not found!")
-        print("Example missing paths:")
+        logger.warning(f"{missing_count}/100 sampled audio files not found!")
+        logger.warning("Example missing paths:")
         for p in checked_paths:
-            print(f"  {p}")
-        print()
+            logger.warning(f"  {p}")
         response = input("Continue anyway? [y/N]: ").strip().lower()
         if response != 'y':
-            print("Aborted.")
+            logger.info("Aborted.")
             sys.exit(1)
     else:
-        print(f"All 100 sampled audio files exist. Proceeding...")
-    print()
+        logger.info("All 100 sampled audio files exist. Proceeding...")
 
     # Convert samples using parallel map
-    print("Converting samples (detecting languages)...", flush=True)
+    logger.info("Converting samples (detecting languages)...")
     convert_fn = partial(convert_sample, audio_base_path=args.audio_base_path)
     ds_converted = ds.map(
         convert_fn,
@@ -296,7 +292,7 @@ def main():
     )
     
     # Filter valid samples
-    print("Filtering valid samples...", flush=True)
+    logger.info("Filtering valid samples...")
     ds_valid = ds_converted.filter(
         lambda x: x["valid"],
         num_proc=args.num_proc,
@@ -304,8 +300,7 @@ def main():
     )
     
     valid_count = len(ds_valid)
-    print(f"Valid samples: {valid_count:,} / {total_samples:,}")
-    print()
+    logger.info(f"Valid samples: {valid_count:,} / {total_samples:,}")
     
     # Remove the 'valid' column before saving
     ds_valid = ds_valid.remove_columns(["valid"])
@@ -313,10 +308,10 @@ def main():
     # Calculate shard sizes
     num_shards = min(args.num_shards, valid_count)
     
-    print(f"Shuffling dataset...")
+    logger.info("Shuffling dataset...")
     ds_valid = ds_valid.shuffle(seed=42)
     
-    print(f"Writing {num_shards} parquet shards...")
+    logger.info(f"Writing {num_shards} parquet shards...")
     
     for shard_idx in tqdm(range(num_shards), desc="Writing shards"):
         shard = ds_valid.shard(num_shards=num_shards, index=shard_idx)
@@ -324,8 +319,7 @@ def main():
         shard.to_parquet(str(shard_path))
     
     # Language statistics
-    print()
-    print("Computing language statistics...")
+    logger.info("Computing language statistics...")
     lang_counts = {}
     for sample in tqdm(ds_valid, desc="Counting languages"):
         text = sample["text"]
@@ -334,26 +328,23 @@ def main():
             lang = text.split("<asr_text>")[0].replace("language ", "").strip()
             lang_counts[lang] = lang_counts.get(lang, 0) + 1
     
-    print()
-    print("=" * 80)
-    print("CONVERSION COMPLETE")
-    print("=" * 80)
-    print(f"Total input:     {total_samples:,}")
-    print(f"Valid output:    {valid_count:,}")
-    print(f"Skipped:         {total_samples - valid_count:,}")
-    print(f"Output shards:   {num_shards} parquet files in {args.output_dir}")
-    print(f"Samples/shard:   ~{valid_count // num_shards:,}")
-    print()
+    logger.info("=" * 60)
+    logger.info("CONVERSION COMPLETE")
+    logger.info("=" * 60)
+    logger.info(f"Total input:     {total_samples:,}")
+    logger.info(f"Valid output:    {valid_count:,}")
+    logger.info(f"Skipped:         {total_samples - valid_count:,}")
+    logger.info(f"Output shards:   {num_shards} parquet files in {args.output_dir}")
+    logger.info(f"Samples/shard:   ~{valid_count // num_shards:,}")
     
     # Print language distribution
-    print("Language distribution:")
+    logger.info("Language distribution:")
     for lang, count in sorted(lang_counts.items(), key=lambda x: -x[1]):
         pct = 100.0 * count / valid_count
-        print(f"  {lang:15s}: {count:>10,} ({pct:5.2f}%)")
-    print()
+        logger.info(f"  {lang:15s}: {count:>10,} ({pct:5.2f}%)")
     
     # Print sample output
-    print("Sample output format:")
+    logger.info("Sample output format:")
     first_shard = output_dir / "00000.parquet"
     if first_shard.exists():
         import pyarrow.parquet as pq
@@ -361,7 +352,7 @@ def main():
         df = table.to_pandas()
         for i in range(min(3, len(df))):
             sample = df.iloc[i].to_dict()
-            print(f"  {json.dumps(sample, ensure_ascii=False)[:120]}...")
+            logger.info(f"  {json.dumps(sample, ensure_ascii=False)[:120]}...")
 
 
 if __name__ == "__main__":
