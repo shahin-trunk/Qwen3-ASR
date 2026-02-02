@@ -42,47 +42,17 @@ from tqdm import tqdm
 _DETECTOR = None
 
 # Language mapping from lingua to Qwen3-ASR format
+# Limited to: Arabic, Malayalam, Chinese, English, Hindi
 LINGUA_TO_QWEN_LANG = {
     "ARABIC": "Arabic",
+    "MALAYALAM": "Malayalam",
     "CHINESE": "Chinese",
     "ENGLISH": "English",
-    "FRENCH": "French",
-    "GERMAN": "German",
-    "SPANISH": "Spanish",
-    "PORTUGUESE": "Portuguese",
-    "INDONESIAN": "Indonesian",
-    "ITALIAN": "Italian",
-    "KOREAN": "Korean",
-    "RUSSIAN": "Russian",
-    "THAI": "Thai",
-    "VIETNAMESE": "Vietnamese",
-    "JAPANESE": "Japanese",
-    "TURKISH": "Turkish",
     "HINDI": "Hindi",
-    "MALAY": "Malay",
-    "DUTCH": "Dutch",
-    "SWEDISH": "Swedish",
-    "DANISH": "Danish",
-    "FINNISH": "Finnish",
-    "POLISH": "Polish",
-    "CZECH": "Czech",
-    "TAGALOG": "Filipino",  # lingua uses TAGALOG
-    "PERSIAN": "Persian",
-    "GREEK": "Greek",
-    "ROMANIAN": "Romanian",
-    "HUNGARIAN": "Hungarian",
-    "MACEDONIAN": "Macedonian",
-    # Cantonese is not directly supported by lingua, will fall back to Chinese
 }
 
-# Qwen3-ASR supported languages for validation
-SUPPORTED_LANGUAGES = {
-    "Chinese", "English", "Cantonese", "Arabic", "German", "French", "Spanish",
-    "Portuguese", "Indonesian", "Italian", "Korean", "Russian", "Thai",
-    "Vietnamese", "Japanese", "Turkish", "Hindi", "Malay", "Dutch", "Swedish",
-    "Danish", "Finnish", "Polish", "Czech", "Filipino", "Persian", "Greek",
-    "Romanian", "Hungarian", "Macedonian"
-}
+# Only these languages are supported in this dataset
+SUPPORTED_LANGUAGES = {"Arabic", "Malayalam", "Chinese", "English", "Hindi"}
 
 
 def get_language_detector():
@@ -92,16 +62,13 @@ def get_language_detector():
         try:
             from lingua import Language, LanguageDetectorBuilder
             
-            # Build detector with all supported languages
+            # Only detect: Arabic, Malayalam, Chinese, English, Hindi
             languages = [
-                Language.ARABIC, Language.CHINESE, Language.ENGLISH, Language.FRENCH,
-                Language.GERMAN, Language.SPANISH, Language.PORTUGUESE, Language.INDONESIAN,
-                Language.ITALIAN, Language.KOREAN, Language.RUSSIAN, Language.THAI,
-                Language.VIETNAMESE, Language.JAPANESE, Language.TURKISH, Language.HINDI,
-                Language.MALAY, Language.DUTCH, Language.SWEDISH, Language.DANISH,
-                Language.FINNISH, Language.POLISH, Language.CZECH, Language.TAGALOG,
-                Language.PERSIAN, Language.GREEK, Language.ROMANIAN, Language.HUNGARIAN,
-                Language.MACEDONIAN,
+                Language.ARABIC,
+                Language.MALAYALAM,
+                Language.CHINESE,
+                Language.ENGLISH,
+                Language.HINDI,
             ]
             
             _DETECTOR = LanguageDetectorBuilder.from_languages(*languages).build()
@@ -318,15 +285,26 @@ def main():
         shard_path = output_dir / f"{shard_idx:05d}.parquet"
         shard.to_parquet(str(shard_path))
     
-    # Language statistics
+    # Language statistics (parallel)
     logger.info("Computing language statistics...")
-    lang_counts = {}
-    for sample in tqdm(ds_valid, desc="Counting languages"):
+    
+    def extract_language(sample):
         text = sample["text"]
-        # Extract language from "language X<asr_text>..."
         if text.startswith("language "):
             lang = text.split("<asr_text>")[0].replace("language ", "").strip()
-            lang_counts[lang] = lang_counts.get(lang, 0) + 1
+        else:
+            lang = "Unknown"
+        return {"lang": lang}
+    
+    lang_ds = ds_valid.map(
+        extract_language,
+        num_proc=args.num_proc,
+        desc="Extracting languages"
+    )
+    
+    # Count using pandas (fast)
+    from collections import Counter
+    lang_counts = Counter(lang_ds["lang"])
     
     logger.info("=" * 60)
     logger.info("CONVERSION COMPLETE")
