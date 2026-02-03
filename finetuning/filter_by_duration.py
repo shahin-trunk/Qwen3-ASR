@@ -18,7 +18,7 @@ import os
 from pathlib import Path
 from typing import Tuple
 
-import torchaudio
+from torchcodec.decoders import AudioDecoder
 from datasets import Dataset, load_dataset
 from loguru import logger
 from tqdm import tqdm
@@ -26,13 +26,13 @@ from tqdm import tqdm
 
 def get_audio_duration(audio_path: str) -> float:
     """
-    Get audio duration in seconds using torchaudio.
+    Get audio duration in seconds using TorchCodec AudioDecoder.
     
     Returns -1.0 if audio cannot be read.
     """
     try:
-        info = torchaudio.info(audio_path)
-        return info.num_frames / info.sample_rate
+        decoder = AudioDecoder(audio_path)
+        return decoder.metadata.duration_seconds
     except Exception:
         return -1.0
 
