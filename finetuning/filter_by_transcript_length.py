@@ -45,6 +45,20 @@ def count_chars(text: str) -> int:
     return len(extract_transcript(text))
 
 
+def has_excessive_repetition(text: str, max_repeat: int = 10) -> bool:
+    """
+    Check if text has excessive character repetition (corrupted data).
+    
+    Returns True if any character is repeated more than max_repeat times consecutively.
+    """
+    if not text:
+        return False
+    
+    # Match any character repeated more than max_repeat times
+    pattern = r'(.)\1{' + str(max_repeat) + r',}'
+    return bool(re.search(pattern, text))
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Filter JSONL by transcript length"
@@ -83,6 +97,12 @@ def main():
         default=None,
         help="Optional file to save rejected samples for analysis"
     )
+    parser.add_argument(
+        "--max_repeat",
+        type=int,
+        default=10,
+        help="Max consecutive repeated characters allowed (default: 10). Detects corrupted data."
+    )
     
     args = parser.parse_args()
     
@@ -103,6 +123,7 @@ def main():
         logger.info(f"Max chars:  {args.max_chars}")
     if args.max_tokens:
         logger.info(f"Max tokens: {args.max_tokens}")
+    logger.info(f"Max repeat: {args.max_repeat} (consecutive chars)")
     
     # Load tokenizer if needed
     tokenizer = None
@@ -120,6 +141,7 @@ def main():
     # Process
     kept = 0
     rejected = 0
+    rejected_repetition = 0
     rejected_samples = []
     
     # Track stats for rejected samples
@@ -138,12 +160,20 @@ def main():
             transcript = extract_transcript(text)
             
             keep = True
+            reject_reason = None
             char_count = len(transcript)
             token_count = None
             
-            # Check character limit
-            if args.max_chars and char_count > args.max_chars:
+            # Check for corrupted data (excessive repetition)
+            if has_excessive_repetition(transcript, args.max_repeat):
                 keep = False
+                reject_reason = "repetition"
+                rejected_repetition += 1
+            
+            # Check character limit
+            if keep and args.max_chars and char_count > args.max_chars:
+                keep = False
+                reject_reason = "char_limit"
             
             # Check token limit
             if keep and args.max_tokens and tokenizer:
@@ -151,6 +181,7 @@ def main():
                 token_count = len(tokens)
                 if token_count > args.max_tokens:
                     keep = False
+                    reject_reason = "token_limit"
             
             if keep:
                 f_out.write(line)
@@ -166,6 +197,7 @@ def main():
                         "audio": sample.get("audio", ""),
                         "char_count": char_count,
                         "token_count": token_count,
+                        "reason": reject_reason,
                         "transcript_preview": transcript[:200] + "..." if len(transcript) > 200 else transcript
                     })
     
@@ -186,6 +218,8 @@ def main():
     logger.info(f"Total input:   {total_lines:,}")
     logger.info(f"Kept:          {kept:,} ({100*kept/total_lines:.2f}%)")
     logger.info(f"Rejected:      {rejected:,} ({100*rejected/total_lines:.2f}%)")
+    if rejected_repetition > 0:
+        logger.info(f"  - Repetition: {rejected_repetition:,} (corrupted data)")
     logger.info(f"Output file:   {args.output_file}")
     
     if rejected > 0:
