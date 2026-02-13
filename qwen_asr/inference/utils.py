@@ -64,7 +64,8 @@ SUPPORTED_LANGUAGES: List[str] = [
     "Greek",
     "Romanian",
     "Hungarian",
-    "Macedonian"
+    "Macedonian",
+    "Malayalam"
 ]
 _ASR_TEXT_TAG = "<asr_text>"
 _LANG_PREFIX = "language "
